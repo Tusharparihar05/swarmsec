@@ -1,0 +1,33 @@
+services:
+  web:
+    image: nginx:alpine
+    container_name: web
+    networks:
+      - labnet
+    ports:
+      - "8080:80"
+
+  api:
+    image: python:3.11-slim
+    container_name: api
+    command: sleep infinity
+    networks:
+      - labnet
+
+  db:
+    image: python:3.11-slim
+    container_name: db
+    command: sleep infinity
+    networks:
+      - labnet
+
+  admin:
+    image: python:3.11-slim
+    container_name: admin
+    command: sleep infinity
+    networks:
+      - labnet
+
+networks:
+  labnet:
+    driver: bridge
