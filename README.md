@@ -1,7 +1,7 @@
 # SwarmSec
 
 Autonomous multi-agent cloud security system using LLM-based reasoning,
-Neo4j graph topology, and Docker sandbox verification.
+Neo4j graph topology, and Docker sandbox verifications.
 
 ## Team
 - Sarthak Pandit (2023BTech072) — Data Science / LLM
