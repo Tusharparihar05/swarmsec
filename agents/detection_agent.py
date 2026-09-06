@@ -1,3 +1,10 @@
+"""
+SwarmSec Detection Agent - full pipeline
+Layer 1: rule_layer.py (regex + threshold, per scenario)
+Layer 2: LLM reasoning, only for cases Layer 1 can't confidently resolve
+Fault tolerance: an LLM failure marks that alert as "uncertain" and
+logs the error, instead of crashing the whole agent.
+"""
 
 import json
 import os
@@ -34,7 +41,6 @@ def tail_file(path):
 
 def llm_reasoning_pass(alert_json, rule_result):
     if MOCK_LLM:
-        # Lets you test the whole pipeline without spending API credits.
         return "VERDICT: uncertain\nREASON: mock mode - no real LLM call made."
 
     prompt = f"""You are a network security analyst reviewing a Suricata alert.
@@ -59,9 +65,6 @@ REASON: <one sentence>
         )
         return response.content[0].text
     except Exception as e:
-        # This is the fault-tolerance piece: don't crash the whole agent
-        # because one downstream call failed. Log it, mark uncertain,
-        # keep processing the next alert.
         print(f"[WARN] LLM call failed: {e}")
         return f"VERDICT: uncertain\nREASON: LLM call failed ({type(e).__name__})"
 
