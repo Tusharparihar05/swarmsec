@@ -1,100 +1,78 @@
+services:
+  web:
+    image: nginx:alpine
+    container_name: web
+    networks:
+      - labnet
+    ports:
+      - "8080:80"
 
-import json
-import os
-import time
+  api:
+    image: python:3.11-slim
+    container_name: api
+    command: sleep infinity
+    networks:
+      - labnet
 
-import redis
-from anthropic import Anthropic
-from dotenv import load_dotenv
+  db:
+    image: python:3.11-slim
+    container_name: db
+    command: sleep infinity
+    networks:
+      - labnet
 
-from rule_layer import rule_based_pass
+  admin:
+    image: python:3.11-slim
+    container_name: admin
+    command: sleep infinity
+    networks:
+      - labnet
 
-load_dotenv()
+  neo4j:
+    image: neo4j:5
+    container_name: neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/swarmsecpass
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    networks:
+      - labnet
 
-EVE_LOG_PATH = os.environ.get("EVE_LOG_PATH", "docker/suricata/logs/eve.json")
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-DETECTION_CHANNEL = "swarmsec:detections"
-MOCK_LLM = os.environ.get("MOCK_LLM", "false").lower() == "true"
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - labnet
 
-r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-llm_client = Anthropic()
+  mongodb:
+    image: mongo:7
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    networks:
+      - labnet
 
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: suricata
+    network_mode: "container:web"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    volumes:
+      - ./suricata/rules:/etc/suricata/rules
+      - ./suricata/logs:/var/log/suricata
+    command: >
+      -i eth0
+      --set default-rule-path=/etc/suricata/rules
+      --set rule-files.0=local.rules
+    depends_on:
+      - web
 
-def tail_file(path):
-    with open(path, "r") as f:
-        f.seek(0, os.SEEK_END)
-        while True:
-            line = f.readline()
-            if not line:
-                time.sleep(0.5)
-                continue
-            yield line
-
-
-def llm_reasoning_pass(alert_json, rule_result):
-    if MOCK_LLM:
-        # Lets you test the whole pipeline without spending API credits.
-        return "VERDICT: uncertain\nREASON: mock mode - no real LLM call made."
-
-    prompt = f"""You are a network security analyst reviewing a Suricata alert.
-
-Alert details:
-- Signature: {alert_json['alert']['signature']}
-- Matched scenario: {rule_result['scenario']}
-- Source IP: {alert_json['src_ip']}
-- Destination IP: {alert_json['dest_ip']}
-- Protocol: {alert_json['proto']}
-
-Is this likely a real attack in progress, or benign/noise?
-Reply in exactly this format:
-VERDICT: <malicious|benign|uncertain>
-REASON: <one sentence>
-"""
-    try:
-        response = llm_client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=150,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text
-    except Exception as e:
-        # This is the fault-tolerance piece: don't crash the whole agent
-        # because one downstream call failed. Log it, mark uncertain,
-        # keep processing the next alert.
-        print(f"[WARN] LLM call failed: {e}")
-        return f"VERDICT: uncertain\nREASON: LLM call failed ({type(e).__name__})"
-
-
-def main():
-    print(f"Detection agent watching {EVE_LOG_PATH} (live) ...")
-    for line in tail_file(EVE_LOG_PATH):
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        if event.get("event_type") != "alert":
-            continue
-
-        rule_result = rule_based_pass(event)
-        llm_verdict = None
-
-        if rule_result["needs_llm_review"]:
-            llm_verdict = llm_reasoning_pass(event, rule_result)
-
-        decision = {
-            "timestamp": event["timestamp"],
-            "src_ip": event["src_ip"],
-            "dest_ip": event["dest_ip"],
-            "signature": event["alert"]["signature"],
-            "rule_result": rule_result,
-            "llm_verdict": llm_verdict,
-        }
-
-        print(json.dumps(decision, indent=2))
-        r.publish(DETECTION_CHANNEL, json.dumps(decision))
-
-
-if __name__ == "__main__":
-    main()
+networks:
+  labnet:
+    driver: bridge
