@@ -64,15 +64,20 @@ services:
       - NET_RAW
       - SYS_NICE
     volumes:
-      - ./suricata/rules:/etc/suricata/rules
+      - suricata_rules:/etc/suricata/rules
+      - ./suricata/rules/local.rules:/etc/suricata/rules/local.rules
       - ./suricata/logs:/var/log/suricata
     command: >
       -i eth0
       --set default-rule-path=/etc/suricata/rules
-      --set rule-files.0=local.rules
+      --set rule-files.0=suricata.rules
+      --set rule-files.1=local.rules
     depends_on:
       - web
 
 networks:
   labnet:
     driver: bridge
+
+volumes:
+  suricata_rules:
