@@ -5,10 +5,17 @@ Notice there is NO web -> admin edge: that missing edge is the whole
 point, it's what the blast-radius query later depends on.
 """
 
+import os
 from neo4j import GraphDatabase
+from dotenv import load_dotenv
 
-URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "swarmsecpass")
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
+
+URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+AUTH = (
+    os.environ.get("NEO4J_USER", "neo4j"),
+    os.environ.get("NEO4J_PASSWORD"),
+)
 
 NODES = ["web", "api", "db", "admin"]
 
@@ -34,6 +41,10 @@ def load_topology(tx):
 
 
 def main():
+    if AUTH[1] is None:
+        raise RuntimeError(
+            "NEO4J_PASSWORD not set - add it to your .env file."
+        )
     driver = GraphDatabase.driver(URI, auth=AUTH)
     with driver.session() as session:
         session.execute_write(load_topology)

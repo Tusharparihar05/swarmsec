@@ -1,0 +1,14 @@
+# SwarmSec - Python Dependencies
+# Install: pip install -r requirements.txt
+
+# --- Core Agents ---
+redis>=5.0                # Inter-agent communication (Pub/Sub)
+neo4j>=5.0                # Graph database for network topology
+pymongo>=4.0              # MongoDB audit logging
+python-dotenv>=1.0        # Load .env config
+
+# --- LLM (Groq - FREE tier, Llama 3.3 70B) ---
+groq>=0.9                 # Groq API client (ultra-fast, free)
+
+# --- Dashboard (optional) ---
+streamlit>=1.30           # Web dashboard for monitoring
