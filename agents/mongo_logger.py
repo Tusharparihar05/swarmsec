@@ -15,8 +15,10 @@ DB_NAME = "swarmsec"
 
 # Redis channel  ->  MongoDB collection
 CHANNELS = {
-    "swarmsec:detections": "detections",  # from detection_agent.py
-    "swarmsec:context": "contexts",       # from graph_context_agent.py
+    "swarmsec:detections": "detections",      # from detection_agent.py
+    "swarmsec:context": "contexts",           # from graph_context_agent.py
+    "swarmsec:remediation": "remediations",   # from remediation_agent.py
+    "swarmsec:verified": "verified_fixes",    # from sandbox_agent.py
 }
 
 
