@@ -31,6 +31,11 @@ MOCK_LLM = os.environ.get("MOCK_LLM", "false").lower() == "true"
 
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
+# --- Dedup: once a (scenario, src_ip) pair crosses threshold and is
+#     published, don't publish it again for DEDUP_COOLDOWN seconds. ---
+_published_keys = {}          # (scenario, src_ip) -> last_publish_time
+DEDUP_COOLDOWN = 30           # seconds
+
 # --- Groq LLM client setup (FREE - https://console.groq.com) ---
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 groq_client = None
@@ -138,6 +143,17 @@ def main():
 
         rule_result = rule_based_pass(event)
         llm_verdict = None
+
+        # --- Dedup: if threshold already met and recently published, skip ---
+        scenario = rule_result.get("scenario")
+        src_ip = event["src_ip"]
+        if rule_result["threshold_met"] and scenario:
+            dedup_key = (scenario, src_ip)
+            now = time.time()
+            last = _published_keys.get(dedup_key, 0)
+            if now - last < DEDUP_COOLDOWN:
+                continue                     # skip — already published recently
+            _published_keys[dedup_key] = now  # first hit after cooldown
 
         if rule_result["needs_llm_review"]:
             llm_verdict = llm_reasoning_pass(event, rule_result)

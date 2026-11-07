@@ -70,12 +70,15 @@ def validate_commands(commands):
             if pattern in cmd:
                 return False, f"Dangerous command blocked: {pattern}"
 
-    # Check commands use expected tools (iptables, arp, kill, etc.)
-    allowed_tools = {"iptables", "ip6tables", "arp", "kill", "pkill", "ss", "netstat"}
+    # Check commands use expected tools
+    allowed_tools = {
+        "iptables", "ip6tables", "arp", "kill", "pkill", "ss", "netstat",
+        "docker",   # docker exec/network/stop/pause used for container isolation
+    }
     for cmd in commands:
         first_word = cmd.strip().split()[0] if cmd.strip() else ""
         if first_word not in allowed_tools:
-            # Not in allowlist, but might still be okay — flag for review
+            # Not in allowlist — flag for review but don't block
             return True, f"Warning: '{first_word}' not in standard allowlist"
 
     return True, "All commands validated"
@@ -108,11 +111,33 @@ def test_remediation(plan):
     results = []
     all_passed = True
     for cmd in commands:
-        # Test command syntax (iptables --check instead of --append in sandbox)
+        first_word = cmd.strip().split()[0] if cmd.strip() else ""
+
+        # Docker commands can't run inside a sandbox container —
+        # validate structure only (check subcommand is allowed)
+        if first_word == "docker":
+            allowed_docker = {"exec", "stop", "pause", "unpause",
+                              "network", "inspect", "restart"}
+            parts = cmd.strip().split()
+            sub = parts[1] if len(parts) > 1 else ""
+            if sub in allowed_docker:
+                results.append({
+                    "command": cmd,
+                    "passed": True,
+                    "output": f"STRUCTURAL OK: docker {sub} whitelisted",
+                })
+            else:
+                results.append({
+                    "command": cmd,
+                    "passed": False,
+                    "output": f"Blocked: docker {sub} not in allowed subcommands",
+                })
+                all_passed = False
+            continue
+
+        # iptables — can't run in sandbox without NET_ADMIN, echo check
         test_cmd = cmd
         if "iptables" in cmd:
-            # In sandbox without network, iptables won't work, but we can
-            # at least validate the command structure
             test_cmd = f"echo 'SYNTAX OK: {cmd}'"
 
         success, output = test_command_in_sandbox(test_cmd)
