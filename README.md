@@ -285,6 +285,7 @@ swarmsec/
 ## 👨‍💻 Author
 
 **Tushar Parihar** — Major Project, 2026
+**Sarthak Pandit** — Major Project, 2026
 
 ---
 
