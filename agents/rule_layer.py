@@ -74,8 +74,7 @@ def rule_based_pass(alert_json: dict) -> dict:
         "scenario": scenario,
         "recent_count": recent_count,
         "threshold_met": threshold_met,
-        # If the threshold is met, layer 1 is confident - no LLM needed.
-        # If it matched a scenario but hasn't hit the threshold yet,
-        # it's borderline - let the LLM weigh in.
-        "needs_llm_review": not threshold_met,
+        # Known scenarios accumulate evidence using their threshold. Reserve
+        # LLM review for signatures that do not match a known scenario.
+        "needs_llm_review": False,
     }

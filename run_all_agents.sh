@@ -24,6 +24,25 @@ for c in $REQUIRED; do
 done
 echo "  ✅ All containers running"
 
+# Suricata shares web's network namespace. The attacker and target must also
+# share a Docker network, or attack traffic never reaches the monitored link.
+WEB_NETWORKS=$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{$name}} {{end}}' web)
+API_NETWORKS=$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{$name}} {{end}}' api)
+SHARED_NETWORK=""
+for network in $WEB_NETWORKS; do
+    case " $API_NETWORKS " in
+        *" $network "*) SHARED_NETWORK=$network; break ;;
+    esac
+done
+
+if [ -z "$SHARED_NETWORK" ]; then
+    echo "  ❌ Containers 'web' and 'api' are not on a shared Docker network."
+    echo "  Recreate them from this project with:"
+    echo "    docker compose -f docker/docker-compose.yml up -d --force-recreate web suricata"
+    exit 1
+fi
+echo "  ✅ web and api share network: $SHARED_NETWORK"
+
 # Load Neo4j topology
 echo ""
 echo "[2/7] Loading Neo4j topology..."

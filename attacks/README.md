@@ -13,3 +13,11 @@ bash attacks/02_sql_injection.sh
 bash attacks/03_xss_attack.sh
 bash attacks/04_reverse_shell.sh
 ```
+
+The agent launcher checks that `web` and `api` share a Docker network. If it
+reports a network mismatch, run this from the repository root and start the
+agents again:
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --force-recreate web suricata
+```

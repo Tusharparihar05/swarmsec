@@ -144,6 +144,11 @@ def main():
         rule_result = rule_based_pass(event)
         llm_verdict = None
 
+        # Let known scenarios accumulate enough evidence before doing any
+        # slower LLM review or publishing them to downstream agents.
+        if rule_result["scenario"] and not rule_result["threshold_met"]:
+            continue
+
         # --- Dedup: if threshold already met and recently published, skip ---
         scenario = rule_result.get("scenario")
         src_ip = event["src_ip"]
