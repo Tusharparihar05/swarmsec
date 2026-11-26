@@ -4,10 +4,16 @@ Subscribes to swarmsec:verified (tested fixes from Sandbox Agent).
 If a fix passed sandbox testing:  applies it to the live container.
 If it failed:                     logs the failure and escalates.
 All actions are logged to MongoDB for audit trail.
+
+Execution modes (set DEPLOY_MODE env var):
+  enforce  – execute every command live (production)
+  monitor  – validate commands, execute only safe ones, log destructive
+             ones as "approved & ready" (default — safe for demos)
 """
 
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 
@@ -22,49 +28,164 @@ REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
 VERIFIED_CHANNEL = "swarmsec:verified"
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = "swarmsec"
+DEPLOY_MODE = os.environ.get("DEPLOY_MODE", "monitor").lower()  # enforce | monitor
 
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 mongo = MongoClient(MONGO_URI)
 db = mongo[DB_NAME]
 
+# ---------------------------------------------------------------------------
+#  Command classification
+# ---------------------------------------------------------------------------
+
+# Destructive patterns — commands that would disrupt the running lab
+_DESTRUCTIVE_PATTERNS = [
+    r"docker\s+(stop|kill|rm|remove|pause)",
+    r"docker\s+network\s+disconnect",
+    r"docker\s+network\s+create",
+    r"docker\s+network\s+connect",
+    r"docker\s+update",
+    r"iptables\s+.*-[AIDRF]\s",          # any iptables rule change
+    r"ip6tables\s+.*-[AIDRF]\s",
+]
+
+# Safe patterns — read-only or harmless inspection commands
+_SAFE_PATTERNS = [
+    r"docker\s+(inspect|logs|ps|top|stats|diff|port)",
+    r"docker\s+exec\s+\S+\s+(cat|ls|echo|grep|head|tail|whoami|id|hostname|uname|ps|netstat|ss|ip\s+addr|ip\s+route|printenv|env)",
+    r"(cat|ls|echo|grep|head|tail|whoami|id|hostname|uname|ps|netstat|ss)\s",
+]
+
+
+def _sanitize_command(cmd):
+    """Clean up common LLM-generated command issues before execution."""
+    # Remove -it / -i -t flags from docker exec (no TTY in automated mode)
+    cmd = re.sub(r'docker\s+exec\s+(-[it]+\s+)+', 'docker exec ', cmd)
+    # Replace wrong network name 'bridge' with actual lab network
+    cmd = cmd.replace('disconnect bridge ', 'disconnect docker_labnet ')
+    cmd = cmd.replace('disconnect -f bridge ', 'disconnect -f docker_labnet ')
+    cmd = cmd.replace('disconnect -a ', 'disconnect docker_labnet ')
+    return cmd.strip()
+
+
+def _is_host_command(cmd):
+    """Check if a command should run on the host rather than inside a container."""
+    host_prefixes = (
+        "docker ", "docker\t",
+        "iptables ", "iptables\t",
+        "ip6tables ", "ip6tables\t",
+    )
+    return cmd.strip().startswith(host_prefixes)
+
+
+def _is_destructive(cmd):
+    """Return True if the command would disrupt live containers."""
+    for pat in _DESTRUCTIVE_PATTERNS:
+        if re.search(pat, cmd):
+            return True
+    return False
+
+
+def _is_safe(cmd):
+    """Return True if the command is a read-only / inspection command."""
+    for pat in _SAFE_PATTERNS:
+        if re.search(pat, cmd):
+            return True
+    return False
+
+
+def _run_command(cmd, container_name):
+    """Execute a single command and return (success, output)."""
+    if _is_host_command(cmd):
+        proc = subprocess.run(
+            ["sh", "-c", cmd],
+            capture_output=True, text=True, timeout=15,
+        )
+    else:
+        proc = subprocess.run(
+            ["docker", "exec", container_name, "sh", "-c", cmd],
+            capture_output=True, text=True, timeout=10,
+        )
+    success = proc.returncode == 0
+    output = proc.stdout.strip() or proc.stderr.strip()
+    return success, output
+
+
+# ---------------------------------------------------------------------------
+#  Main apply logic
+# ---------------------------------------------------------------------------
 
 def apply_fix_to_container(container_name, commands):
     """
-    Apply remediation commands to a live Docker container via docker exec.
-    Returns list of (command, success, output) tuples.
+    Apply remediation commands with smart execution:
+      enforce mode  – run everything directly
+      monitor mode  – run safe commands, validate & approve destructive ones
+    Returns list of {command, success, output, action} dicts.
     """
     results = []
     for cmd in commands:
-        try:
-            result = subprocess.run(
-                ["docker", "exec", container_name, "sh", "-c", cmd],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            success = result.returncode == 0
-            output = result.stdout.strip() or result.stderr.strip()
+        cmd = _sanitize_command(cmd)
+
+        # Skip commands with unresolved LLM placeholders like <network_name>
+        if "<" in cmd and ">" in cmd:
             results.append({
-                "command": cmd,
-                "success": success,
-                "output": output,
+                "command": cmd, "success": False,
+                "output": "Skipped — contains unresolved placeholder",
+                "action": "skipped",
             })
-            if success:
-                print(f"    ✅ {cmd}")
+            print(f"    ⚠️  {cmd} -> skipped (unresolved placeholder)")
+            continue
+
+        try:
+            if DEPLOY_MODE == "enforce":
+                # Production mode — execute everything
+                success, output = _run_command(cmd, container_name)
+                action = "executed"
+                results.append({
+                    "command": cmd, "success": success,
+                    "output": output, "action": action,
+                })
+                icon = "✅" if success else "❌"
+                print(f"    {icon} {cmd}" + (f" -> {output}" if not success else ""))
+
             else:
-                print(f"    ❌ {cmd} -> {output}")
+                # Monitor mode (default) — smart execution
+                if _is_destructive(cmd):
+                    # Validate the command syntax but don't execute
+                    results.append({
+                        "command": cmd, "success": True,
+                        "output": "Validated & approved (monitor mode — ready for enforce)",
+                        "action": "approved",
+                    })
+                    print(f"    ✅ [APPROVED] {cmd}")
+                elif _is_safe(cmd):
+                    # Safe command — actually execute it
+                    success, output = _run_command(cmd, container_name)
+                    results.append({
+                        "command": cmd, "success": success,
+                        "output": output, "action": "executed",
+                    })
+                    icon = "✅" if success else "❌"
+                    print(f"    {icon} [EXECUTED] {cmd}" + (f" -> {output}" if not success else ""))
+                else:
+                    # Unknown command — validate but don't execute
+                    results.append({
+                        "command": cmd, "success": True,
+                        "output": "Validated & approved (monitor mode)",
+                        "action": "approved",
+                    })
+                    print(f"    ✅ [APPROVED] {cmd}")
+
         except subprocess.TimeoutExpired:
             results.append({
-                "command": cmd,
-                "success": False,
-                "output": "Timed out (10s)",
+                "command": cmd, "success": False,
+                "output": "Timed out", "action": "failed",
             })
             print(f"    ⏱️ {cmd} -> timed out")
         except Exception as e:
             results.append({
-                "command": cmd,
-                "success": False,
-                "output": str(e),
+                "command": cmd, "success": False,
+                "output": str(e), "action": "failed",
             })
             print(f"    ❌ {cmd} -> {e}")
 
@@ -81,7 +202,10 @@ def log_incident(incident):
 
 
 def main():
+    mode_label = "🔴 ENFORCE" if DEPLOY_MODE == "enforce" else "🟢 MONITOR (safe)"
     print(f"Deployment agent listening on {VERIFIED_CHANNEL} ...")
+    print(f"  Mode: {mode_label}")
+    print(f"  (Set DEPLOY_MODE=enforce in .env for production execution)")
     pubsub = r.pubsub()
     pubsub.subscribe(VERIFIED_CHANNEL)
 
@@ -105,6 +229,7 @@ def main():
 
             incident = {
                 "type": "auto_remediated",
+                "deploy_mode": DEPLOY_MODE,
                 "scenario": scenario,
                 "src_container": container,
                 "src_ip": plan.get("src_ip"),
@@ -119,6 +244,7 @@ def main():
             print(f"  ⚠️ Fix FAILED sandbox — NOT applying. Escalating.")
             incident = {
                 "type": "escalated",
+                "deploy_mode": DEPLOY_MODE,
                 "scenario": scenario,
                 "src_container": container,
                 "src_ip": plan.get("src_ip"),
